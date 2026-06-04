@@ -30,9 +30,6 @@ INSTALLED_APPS = [
 
     "apps.accounts",
     "apps.uploads",
-    "apps.dashboard",
-    "apps.insights",
-    "apps.chats",
 ]
 
 MIDDLEWARE = [
