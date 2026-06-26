@@ -1,6 +1,6 @@
 import { useState } from "react";
 import API from "../services/api";
-import Layout from "../components/Layout";
+import Layout from "../components/layout";
 
 export default function Chat() {
   const [message, setMessage] = useState("");

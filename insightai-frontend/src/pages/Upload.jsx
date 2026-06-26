@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import API from "../services/api";
-import Layout from "../components/Layout";
+import Layout from "../components/layout";
 
 export default function Upload() {
   const [file, setFile] = useState(null);
