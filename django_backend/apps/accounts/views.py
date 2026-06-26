@@ -288,157 +288,392 @@ class ChartDataView(APIView):
     def get(self, request, file_id):
         try:
             file_obj = UploadedFile.objects.get(id=file_id)
-
             df = safe_read_file(file_obj.file.path, file_obj.filename)
             df = df.dropna(how="all")
 
-            rows, cols = df.shape
+            df.columns = [str(col).strip() for col in df.columns]
 
-            # Convert useful columns to numeric safely
-            for col in ["Salary", "Performance", "Experience", "Age"]:
-                if col in df.columns:
+            col_map = {col.lower(): col for col in df.columns}
+
+            def find_col(name):
+                return col_map.get(name.lower())
+
+            employee_id_col = find_col("EmployeeID")
+            name_col = find_col("Name")
+            department_col = find_col("Department")
+            age_col = find_col("Age")
+            salary_col = find_col("Salary")
+            experience_col = find_col("Experience")
+            city_col = find_col("City")
+            performance_col = find_col("Performance")
+
+            numeric_columns = [
+                age_col,
+                salary_col,
+                experience_col,
+                performance_col,
+            ]
+
+            for col in numeric_columns:
+                if col:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            # -----------------------------
-            # KPI CALCULATIONS
-            # -----------------------------
-            kpis = {
-                "rows": int(rows),
-                "columns": int(cols),
-                "missing_values": int(df.isnull().sum().sum()),
-                "avg_salary": round(float(df["Salary"].mean()), 2) if "Salary" in df.columns else 0,
-                "max_salary": round(float(df["Salary"].max()), 2) if "Salary" in df.columns else 0,
-                "min_salary": round(float(df["Salary"].min()), 2) if "Salary" in df.columns else 0,
-                "avg_performance": round(float(df["Performance"].mean()), 2) if "Performance" in df.columns else 0,
-                "avg_experience": round(float(df["Experience"].mean()), 2) if "Experience" in df.columns else 0,
-            }
+            def clean_value(value):
+                if pd.isna(value):
+                    return None
+                return round(float(value), 2)
 
-            # -----------------------------
-            # BAR 1: Average Salary by Department
-            # -----------------------------
-            salary_by_department = {}
+            def chart_mean(category_col, value_col, top=10, ascending=False):
+                if not category_col or not value_col:
+                    return {"labels": [], "values": []}
 
-            if "Department" in df.columns and "Salary" in df.columns:
-                grouped = (
-                    df.groupby("Department")["Salary"]
+                temp = df[[category_col, value_col]].dropna()
+
+                if temp.empty:
+                    return {"labels": [], "values": []}
+
+                result = (
+                    temp.groupby(category_col)[value_col]
                     .mean()
                     .round(2)
-                    .sort_values(ascending=False)
+                    .sort_values(ascending=ascending)
+                    .head(top)
                 )
 
-                salary_by_department = {
-                    "title": "Average Salary by Department",
-                    "labels": grouped.index.astype(str).tolist(),
-                    "values": grouped.values.tolist(),
+                return {
+                    "labels": [str(x) for x in result.index.tolist()],
+                    "values": result.values.tolist(),
                 }
 
-            # -----------------------------
-            # BAR 2: Average Performance by Department
-            # -----------------------------
-            performance_by_department = {}
+            def chart_count(category_col, top=10):
+                if not category_col:
+                    return {"labels": [], "values": []}
 
-            if "Department" in df.columns and "Performance" in df.columns:
-                grouped = (
-                    df.groupby("Department")["Performance"]
-                    .mean()
-                    .round(2)
-                    .sort_values(ascending=False)
-                )
+                result = df[category_col].dropna().value_counts().head(top)
 
-                performance_by_department = {
-                    "title": "Average Performance by Department",
-                    "labels": grouped.index.astype(str).tolist(),
-                    "values": grouped.values.tolist(),
+                return {
+                    "labels": [str(x) for x in result.index.tolist()],
+                    "values": result.values.tolist(),
                 }
 
-            # -----------------------------
-            # PIE: Department Distribution
-            # -----------------------------
-            department_distribution = {}
+            def numeric_distribution(value_col, bins=5):
+                if not value_col:
+                    return {"labels": [], "values": []}
 
-            if "Department" in df.columns:
-                counts = df["Department"].fillna("Unknown").value_counts()
+                values = df[value_col].dropna()
 
-                department_distribution = {
-                    "title": "Department Distribution",
-                    "labels": counts.index.astype(str).tolist(),
+                if values.empty or values.nunique() < 2:
+                    return {"labels": [], "values": []}
+
+                cuts = pd.cut(values, bins=bins)
+                counts = cuts.value_counts().sort_index()
+
+                labels = []
+                for interval in counts.index:
+                    labels.append(f"{int(interval.left):,} - {int(interval.right):,}")
+
+                return {
+                    "labels": labels,
                     "values": counts.values.tolist(),
                 }
 
-            # -----------------------------
-            # HISTOGRAM: Salary Distribution
-            # -----------------------------
-            salary_distribution = {}
+            def band_performance(source_col, bins, labels):
+                if not source_col or not performance_col:
+                    return {"labels": [], "values": []}
 
-            if "Salary" in df.columns:
-                salary_data = df["Salary"].dropna()
+                temp = df[[source_col, performance_col]].dropna()
 
-                if len(salary_data) > 0:
-                    bins = pd.cut(salary_data, bins=6)
-                    counts = bins.value_counts().sort_index()
+                if temp.empty:
+                    return {"labels": [], "values": []}
 
-                    salary_distribution = {
-                        "title": "Salary Distribution",
-                        "labels": [str(interval) for interval in counts.index],
-                        "values": counts.values.tolist(),
-                    }
+                temp["Band"] = pd.cut(
+                    temp[source_col],
+                    bins=bins,
+                    labels=labels,
+                    include_lowest=True,
+                )
 
-            # -----------------------------
-            # LINE: Performance Trend
-            # -----------------------------
-            performance_trend = {}
+                result = (
+                    temp.groupby("Band", observed=False)[performance_col]
+                    .mean()
+                    .dropna()
+                    .round(2)
+                )
 
-            if "Performance" in df.columns:
-                trend = df["Performance"].head(30).fillna(0)
-
-                performance_trend = {
-                    "title": "Performance Trend",
-                    "labels": [str(i + 1) for i in range(len(trend))],
-                    "values": trend.tolist(),
+                return {
+                    "labels": [str(x) for x in result.index.tolist()],
+                    "values": result.values.tolist(),
                 }
 
-            # -----------------------------
-            # SCATTER: Salary vs Performance
-            # -----------------------------
-            salary_vs_performance = {}
+            salary_series = df[salary_col].dropna() if salary_col else pd.Series(dtype=float)
+            performance_series = df[performance_col].dropna() if performance_col else pd.Series(dtype=float)
+            experience_series = df[experience_col].dropna() if experience_col else pd.Series(dtype=float)
+            age_series = df[age_col].dropna() if age_col else pd.Series(dtype=float)
 
-            if "Salary" in df.columns and "Performance" in df.columns:
-                scatter_df = df[["Salary", "Performance"]].dropna().head(80)
+            performance_max = performance_series.max() if not performance_series.empty else 0
+
+            high_perf_limit = 85 if performance_max > 10 else 8
+            low_perf_limit = 60 if performance_max > 10 else 5
+
+            high_performers = 0
+            low_performers = 0
+
+            if performance_col:
+                high_performers = int((df[performance_col] >= high_perf_limit).sum())
+                low_performers = int((df[performance_col] <= low_perf_limit).sum())
+
+            missing_values = int(df.isnull().sum().sum())
+
+            salary_performance_corr = None
+            experience_performance_corr = None
+
+            if salary_col and performance_col:
+                temp = df[[salary_col, performance_col]].dropna()
+                if len(temp) > 1:
+                    salary_performance_corr = clean_value(
+                        temp[salary_col].corr(temp[performance_col])
+                    )
+
+            if experience_col and performance_col:
+                temp = df[[experience_col, performance_col]].dropna()
+                if len(temp) > 1:
+                    experience_performance_corr = clean_value(
+                        temp[experience_col].corr(temp[performance_col])
+                    )
+
+            kpis = {
+                "rows": int(df.shape[0]),
+                "columns": int(df.shape[1]),
+                "missing_values": missing_values,
+                "avg_salary": clean_value(salary_series.mean()) if not salary_series.empty else None,
+                "median_salary": clean_value(salary_series.median()) if not salary_series.empty else None,
+                "max_salary": clean_value(salary_series.max()) if not salary_series.empty else None,
+                "min_salary": clean_value(salary_series.min()) if not salary_series.empty else None,
+                "avg_performance": clean_value(performance_series.mean()) if not performance_series.empty else None,
+                "avg_experience": clean_value(experience_series.mean()) if not experience_series.empty else None,
+                "avg_age": clean_value(age_series.mean()) if not age_series.empty else None,
+                "high_performers": high_performers,
+                "low_performers": low_performers,
+                "salary_performance_corr": salary_performance_corr,
+                "experience_performance_corr": experience_performance_corr,
+            }
+
+            salary_by_department = chart_mean(department_col, salary_col)
+            performance_by_department = chart_mean(department_col, performance_col)
+            department_distribution = chart_count(department_col)
+            city_performance = chart_mean(city_col, performance_col)
+            city_distribution = chart_count(city_col)
+            salary_distribution = numeric_distribution(salary_col, bins=6)
+
+            if performance_col:
+                if performance_max > 10:
+                    perf_bins = [0, 50, 70, 85, 100]
+                    perf_labels = ["Low", "Average", "Good", "Excellent"]
+                else:
+                    perf_bins = [0, 4, 6, 8, 10]
+                    perf_labels = ["Low", "Average", "Good", "Excellent"]
+
+                temp_perf = df[performance_col].dropna()
+                if not temp_perf.empty:
+                    perf_cut = pd.cut(
+                        temp_perf,
+                        bins=perf_bins,
+                        labels=perf_labels,
+                        include_lowest=True,
+                    )
+                    perf_counts = perf_cut.value_counts().sort_index()
+
+                    performance_distribution = {
+                        "labels": [str(x) for x in perf_counts.index.tolist()],
+                        "values": perf_counts.values.tolist(),
+                    }
+                else:
+                    performance_distribution = {"labels": [], "values": []}
+            else:
+                performance_distribution = {"labels": [], "values": []}
+
+            experience_performance = band_performance(
+                experience_col,
+                [-1, 1, 3, 5, 10, 100],
+                ["0-1 yrs", "2-3 yrs", "4-5 yrs", "6-10 yrs", "10+ yrs"],
+            )
+
+            age_performance = band_performance(
+                age_col,
+                [0, 25, 35, 45, 60, 100],
+                ["<25", "25-35", "35-45", "45-60", "60+"],
+            )
+
+            salary_vs_performance = {"values": []}
+
+            if salary_col and performance_col:
+                temp = df[[salary_col, performance_col]].dropna().head(300)
 
                 salary_vs_performance = {
-                    "title": "Salary vs Performance",
                     "values": [
                         {
-                            "x": float(row["Salary"]),
-                            "y": float(row["Performance"])
+                            "x": float(row[salary_col]),
+                            "y": float(row[performance_col]),
                         }
-                        for _, row in scatter_df.iterrows()
-                    ],
+                        for _, row in temp.iterrows()
+                    ]
                 }
 
-            return Response({
-                "message": "Advanced analytics charts generated successfully",
-                "filename": file_obj.filename,
-                "kpis": kpis,
-                "salary_by_department": salary_by_department,
-                "performance_by_department": performance_by_department,
-                "department_distribution": department_distribution,
-                "salary_distribution": salary_distribution,
-                "performance_trend": performance_trend,
-                "salary_vs_performance": salary_vs_performance,
-            })
+            performance_trend = {"labels": [], "values": []}
+
+            if performance_col:
+                trend = df[performance_col].dropna().head(50)
+                performance_trend = {
+                    "labels": [str(i + 1) for i in range(len(trend))],
+                    "values": trend.round(2).tolist(),
+                }
+
+            compensation_efficiency = {"labels": [], "values": []}
+
+            if department_col and salary_col and performance_col:
+                temp = df[[department_col, salary_col, performance_col]].dropna()
+                temp = temp[temp[salary_col] > 0]
+
+                if not temp.empty:
+                    temp["Efficiency"] = (temp[performance_col] / temp[salary_col]) * 1000
+
+                    result = (
+                        temp.groupby(department_col)["Efficiency"]
+                        .mean()
+                        .round(2)
+                        .sort_values(ascending=False)
+                        .head(10)
+                    )
+
+                    compensation_efficiency = {
+                        "labels": [str(x) for x in result.index.tolist()],
+                        "values": result.values.tolist(),
+                    }
+
+            top_employees = []
+
+            if performance_col:
+                preferred_columns = [
+                    employee_id_col,
+                    name_col,
+                    department_col,
+                    city_col,
+                    salary_col,
+                    experience_col,
+                    performance_col,
+                ]
+
+                available_columns = [col for col in preferred_columns if col]
+
+                top_df = (
+                    df.sort_values(by=performance_col, ascending=False)
+                    .head(10)[available_columns]
+                    .fillna("")
+                )
+
+                top_employees = top_df.to_dict(orient="records")
+
+            department_table = []
+
+            if department_col:
+                agg_data = {
+                    "Employees": (department_col, "count"),
+                }
+
+                if salary_col:
+                    agg_data["Avg Salary"] = (salary_col, "mean")
+
+                if performance_col:
+                    agg_data["Avg Performance"] = (performance_col, "mean")
+
+                if experience_col:
+                    agg_data["Avg Experience"] = (experience_col, "mean")
+
+                dept_summary = (
+                    df.groupby(department_col)
+                    .agg(**agg_data)
+                    .reset_index()
+                    .round(2)
+                )
+
+                department_table = dept_summary.to_dict(orient="records")
+
+            insights = []
+
+            if performance_by_department["labels"]:
+                insights.append(
+                    f"Best performing department is {performance_by_department['labels'][0]} with an average performance of {performance_by_department['values'][0]}."
+                )
+
+            if salary_by_department["labels"]:
+                insights.append(
+                    f"Highest average salary department is {salary_by_department['labels'][0]} with ₹{salary_by_department['values'][0]} average salary."
+                )
+
+            if city_performance["labels"]:
+                insights.append(
+                    f"Top performing city is {city_performance['labels'][0]} with average performance of {city_performance['values'][0]}."
+                )
+
+            if salary_performance_corr is not None:
+                if salary_performance_corr >= 0.5:
+                    insights.append(
+                        "Salary and performance have a strong positive relationship."
+                    )
+                elif salary_performance_corr <= -0.5:
+                    insights.append(
+                        "Salary and performance have a negative relationship. Higher salary does not guarantee better performance."
+                    )
+                else:
+                    insights.append(
+                        "Salary and performance have a weak relationship. Performance may depend more on experience, department, or other factors."
+                    )
+
+            if high_performers:
+                insights.append(
+                    f"There are {high_performers} high-performing employees in this dataset."
+                )
+
+            if low_performers:
+                insights.append(
+                    f"There are {low_performers} low-performing employees who may need training or support."
+                )
+
+            if missing_values == 0:
+                insights.append("Dataset quality is good because there are no missing values.")
+            else:
+                insights.append(
+                    f"Dataset has {missing_values} missing values. Cleaning is recommended before final business decisions."
+                )
+
+            return Response(
+                {
+                    "message": "Professional business dashboard generated successfully",
+                    "filename": file_obj.filename,
+                    "kpis": kpis,
+                    "business_insights": insights,
+                    "salary_by_department": salary_by_department,
+                    "performance_by_department": performance_by_department,
+                    "department_distribution": department_distribution,
+                    "city_performance": city_performance,
+                    "city_distribution": city_distribution,
+                    "salary_distribution": salary_distribution,
+                    "performance_distribution": performance_distribution,
+                    "experience_performance": experience_performance,
+                    "age_performance": age_performance,
+                    "salary_vs_performance": salary_vs_performance,
+                    "performance_trend": performance_trend,
+                    "compensation_efficiency": compensation_efficiency,
+                    "top_employees": top_employees,
+                    "department_table": department_table,
+                }
+            )
 
         except UploadedFile.DoesNotExist:
-            return Response(
-                {"error": "Dataset not found"},
-                status=404
-            )
+            return Response({"error": "Dataset not found"}, status=404)
 
         except Exception as e:
-            return Response(
-                {"error": str(e)},
-                status=500
-            )
+            return Response({"error": str(e)}, status=500)
 class TopEmployeesView(APIView):
     permission_classes = [IsAuthenticated]
 

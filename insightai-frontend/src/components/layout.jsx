@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import QuickUpload from "./QuickUpload";
 
 export default function Layout({ children }) {
   const navigate = useNavigate();
@@ -32,24 +33,35 @@ export default function Layout({ children }) {
           </button>
         </div>
 
-        {menu.map((item) => (
-          <div
-            key={item.path}
-            onClick={() => navigate(item.path)}
-            style={{
-              ...styles.menuItem,
-              background:
-                location.pathname === item.path
-                  ? "rgba(255,255,255,0.08)"
-                  : "transparent",
-              backdropFilter: location.pathname === item.path ? "blur(10px)" : "none",
-              justifyContent: open ? "flex-start" : "center",
-            }}
-          >
-            <span style={styles.icon}>{item.icon}</span>
-            {open && <span>{item.name}</span>}
+        {/* MENU OPTIONS */}
+        <div style={styles.menuBox}>
+          {menu.map((item) => (
+            <div
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              style={{
+                ...styles.menuItem,
+                background:
+                  location.pathname === item.path
+                    ? "rgba(255,255,255,0.08)"
+                    : "transparent",
+                backdropFilter:
+                  location.pathname === item.path ? "blur(10px)" : "none",
+                justifyContent: open ? "flex-start" : "center",
+              }}
+            >
+              <span style={styles.icon}>{item.icon}</span>
+              {open && <span>{item.name}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* QUICK UPLOAD BELOW MENU */}
+        {open && (
+          <div style={styles.uploadArea}>
+            <QuickUpload />
           </div>
-        ))}
+        )}
       </div>
 
       {/* MAIN AREA */}
@@ -85,6 +97,7 @@ const styles = {
     padding: "15px",
     transition: "0.3s ease",
     borderRight: "1px solid rgba(255,255,255,0.05)",
+    overflowY: "auto",
   },
 
   topBar: {
@@ -109,6 +122,10 @@ const styles = {
     cursor: "pointer",
   },
 
+  menuBox: {
+    marginBottom: "18px",
+  },
+
   menuItem: {
     padding: "12px",
     borderRadius: "12px",
@@ -122,6 +139,12 @@ const styles = {
 
   icon: {
     fontSize: "16px",
+  },
+
+  uploadArea: {
+    marginTop: "18px",
+    paddingTop: "18px",
+    borderTop: "1px solid rgba(255,255,255,0.08)",
   },
 
   main: {

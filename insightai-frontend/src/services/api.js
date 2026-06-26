@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const API = axios.create({
-  baseURL: "https://insightai-ai-data-analytics-platform.onrender.com/api/",
+  baseURL: "https://yourusername.pythonanywhere.com/api/"
 });
 
 API.interceptors.request.use((config) => {
